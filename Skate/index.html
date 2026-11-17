@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skatepark</title>
+<style>
+html,body{margin:0;height:100%;background:#0b1410;color:#e0f8cf;font:14px "Courier New",monospace}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+#wrap{position:relative;line-height:0}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;box-shadow:0 0 0 4px #1d3326}
+#pop{position:absolute;left:0;right:0;top:14%;text-align:center;font-weight:bold;font-size:clamp(14px,3vw,30px);letter-spacing:2px;text-shadow:2px 2px 0 #071821;opacity:0;pointer-events:none;line-height:1.2}
+#pop.show{animation:pop 1.2s both}
+@keyframes pop{0%{opacity:0;transform:translateY(10px)}12%{opacity:1;transform:none}75%{opacity:1}100%{opacity:0;transform:translateY(-12px)}}
+#hud{display:flex;gap:28px;font-size:18px}#hud b{color:#e8b300}
+#help{opacity:.7;text-align:center;max-width:760px;padding:0 10px}
+#pad{display:none;gap:24px;user-select:none;touch-action:none}
+#pad .grp{display:grid;grid-template-columns:repeat(3,52px);grid-auto-rows:52px;gap:4px}
+#pad button{background:#1d3326;color:#e0f8cf;border:2px solid #3b6b4c;border-radius:8px;font:bold 15px "Courier New",monospace}
+@media (pointer:coarse){#pad{display:flex}}
+</style></head><body>
+<div id="wrap"><canvas id="c"></canvas><div id="pop"></div></div>
+<div id="hud"><span>SCORE <b id="sc">0</b></span><span>COMBO <b id="cb">x1</b></span><span>BEST AIR <b id="ba">0</b></span></div>
+<div id="help">Arrows: hold to push off, tap a side arrow to steer, hold the opposite arrow to brake &middot; S: ollie &middot; A: kickflip (A+&uarr; heelflip, A+&darr; pop shove-it) &middot; D: grab (hold in the air) &middot; W: grind (press near a ledge and you stick to it) &middot; R: reset<br>Ride left into a kicker and press S or A just before the lip for extra pop. Land flips cleanly or you bail!</div>
+<div id="pad"><div class="grp"><span></span><button data-k="up">&uarr;</button><span></span><button data-k="left">&larr;</button><button data-k="down">&darr;</button><button data-k="right">&rarr;</button></div>
+<div class="grp" style="grid-template-columns:repeat(2,84px)"><button data-a="o">OLLIE</button><button data-a="f">FLIP</button><button data-a="g">GRAB</button><button data-a="w">GRIND</button></div></div>
+<script>
+(()=>{
+const VW=192,VH=108,TX=40,TY=24,WW=TX*16,WH=TY*16,G=640,MAXSP=105,PUSHMAX=85,ACC=120,FRIC=28,BRAKE=150,XMIN=22,XMAX=WW-22,YMIN=36,YMAX=WH-18,RAMP=7,FLIPT=.45; // VW/VH = visible area (smaller = bigger sprites)
+const EMB={bg:"data:image/png;base64,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",pl:"data:image/png;base64,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",kk:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAGKADAAQAAAABAAAAGAAAAADiNXWtAAAAz0lEQVRIDWNgGAWjITAaAqMhQFwICKrI/CdOJemqWEBaOEX4QRhsybMTVxlJNwa3DrAFIGlDE0GoKm2qWgS3AGQ6rzA30CKoPQzUsQjFApglIJpaFmFYAHM/yDfoFn1/85Hh/Z0nJMURE8xAEP357VdkLpgNsggSdILgxIChgIAA2Acgl50/A1EJCxqYD2D6Ifz3MC7RNNgCUDJl5eIAazp/BmIILouINhmqECMOqG0RhgUwF+KyCCZPLA2PAwYR7FpA8QMCoDiCsbGrHCBRAJbhNtk85HtlAAAAAElFTkSuQmCC"}; // fallbacks if assets/ folder is missing
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');cv.width=VW;cv.height=VH;
+function fit(){const s=Math.max(1,Math.floor(Math.min((innerWidth-16)/VW,(innerHeight-150)/VH)));cv.style.width=VW*s+'px';cv.style.height=VH*s+'px'}
+addEventListener('resize',fit);fit();
+const load=(p,e)=>new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.onerror=()=>{if(!e)return r(null);const j=new Image();j.onload=()=>r(j);j.src=e};i.src=p});
+Promise.all([load('assets/Level_indoor_skatepark.png',EMB.bg),load('assets/Player.png',EMB.pl),load('assets/Obstacles_kicker.png',EMB.kk),load('assets/Ledge.png',null)]).then(a=>start(...a));
+
+function start(bg,pl,kk,ledgeImg){
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+// board = bottom 3 rows of the player sprite; body = rows above it
+const mk=()=>{const c=document.createElement('canvas');c.width=8;c.height=3;return c};
+const board=mk();board.getContext('2d').drawImage(pl,8,20,8,3,0,0,8,3);
+const boardF=mk(),fc=boardF.getContext('2d');fc.translate(0,3);fc.scale(1,-1);fc.drawImage(board,0,0);
+const K=[{x:150,y:60},{x:470,y:70},{x:300,y:150},{x:560,y:190},{x:120,y:250},{x:400,y:290},{x:250,y:320}]; // kicker sprite origins
+const world=document.createElement('canvas');world.width=WW;world.height=WH;const wc=world.getContext('2d');
+for(let ty=0;ty<TY;ty++)for(let tx=0;tx<TX;tx++) // tile the level: corners/edges from the sprite, floor repeated
+ wc.drawImage(bg,(tx===0?0:tx===TX-1?23:5)*16,(ty===0?0:ty===TY-1?7:3)*16,16,16,tx*16,ty*16,16,16);
+const LH=8,LD=8; // ledge height and floor depth (px)
+const LEDGES=[{x:180,y:200,w:64},{x:420,y:170,w:64},{x:300,y:230,w:64}]; // placeholder ledges; drop assets/Ledge.png to replace
+if(ledgeImg)for(const l of LEDGES)l.w=ledgeImg.width;
+const kickerH=(x,y)=>{let m=0;for(const k of K)if(y>=k.y+14&&y<=k.y+23&&x>=k.x+2&&x<=k.x+12)m=Math.max(m,RAMP*(k.x+12-x)/10);return m};
+const ledgeAt=(x,y)=>LEDGES.find(l=>x>=l.x&&x<=l.x+l.w&&y>=l.y&&y<=l.y+LD)||null;
+const groundH=(x,y)=>Math.max(kickerH(x,y),ledgeAt(x,y)?LH:0);
+
+let AC;function beep(f,d,t,v,s){try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();const o=AC.createOscillator(),g=AC.createGain(),n=AC.currentTime;o.type=t;o.frequency.setValueAtTime(f,n);o.frequency.linearRampToValueAtTime(f+s,n+d);g.gain.setValueAtTime(v,n);g.gain.exponentialRampToValueAtTime(.001,n+d);o.connect(g);g.connect(AC.destination);o.start();o.stop(n+d)}catch(e){}}
+const $=id=>document.getElementById(id);let score=0,combo=1,best=0,T=0,lastLand=-9;
+const hud=()=>{$('sc').textContent=score;$('cb').textContent='x'+combo;$('ba').textContent=Math.round(best)+' px'};
+function popup(t,c){const p=$('pop');p.textContent=t;p.style.color=c||'#e0f8cf';p.classList.remove('show');void p.offsetWidth;p.classList.add('show')}
+
+let camX=null,camY=null,P;
+function reset(){camX=camY=null;P={x:WW/2,y:WH/2,z:0,vx:0,vy:0,vz:0,state:'ground',dir:{x:-1,y:0},face:-1,flip:-1,flipDone:false,jump:null,crouch:0,land:0,bail:0,ollieBuf:0,flipBuf:0,flipKind:'kick',trick:'kick',fdur:FLIPT,grindBuf:0,grabbing:false,ledge:null,gdir:1,gs:0,bob:0,bx:0,by:0,bvx:0,bvy:0};score=0;combo=1;best=0;hud()}
+reset();
+
+function startFlip(k){k=typeof k==='string'?k:'kick';P.trick=k;P.fdur=k==='shove'?.38:FLIPT;P.flip=0;if(P.jump)P.jump.trick=k;beep(k==='shove'?400:k==='heel'?600:520,.14,'square',.03,k==='heel'?-200:260)}
+function launch(vz,o){P.state='air';P.vz=vz;P.jump={ollie:!!o.ollie,kicker:!!o.kicker,maxH:0};P.crouch=.07;P.flipDone=false;P.flip=-1;if(o.flip)startFlip(o.flip);beep(200,.09,'square',.05,220)}
+function pressOllie(){if(P.state==='grind'){leaveLedge(150);return}if(P.state!=='ground')return;if(P.z<.5)launch(175,{ollie:1});else P.ollieBuf=.28}
+function leaveLedge(vz){P.state='air';P.vz=vz;P.ledge=null;P.crouch=.07;P.jump.ollie=true;beep(200,.09,'square',.05,220)}
+const SNAP=14; // how close (px) to a ledge the grind button magnets you onto it
+function nearLedge(){let best=null,bd=1e9;for(const l of LEDGES){const dx=P.x<l.x?l.x-P.x:P.x>l.x+l.w?P.x-(l.x+l.w):0,dy=Math.abs(P.y-(l.y+LD/2));
+ if(dx<=SNAP&&dy<=SNAP&&dx+dy<bd){bd=dx+dy;best=l}}return best}
+function tryGrind(){const l=nearLedge();if(!l||P.z>LH+20)return false;
+ if(P.state==='ground'||!P.jump)P.jump={ollie:false,kicker:false,maxH:0};
+ P.state='grind';P.ledge=l;P.x=clamp(P.x,l.x+1,l.x+l.w-1);P.vz=0;P.flip=-1;P.flipDone=false;P.grabbing=false;
+ P.gdir=P.vx<-8?-1:P.vx>8?1:(P.face||1);P.gs=clamp(Math.hypot(P.vx,P.vy),55,100);P.dir={x:P.gdir,y:0};
+ P.jump.grind=true;P.jump.glen=P.jump.glen||0;beep(300,.08,'sawtooth',.04,100);return true}
+function pressGrind(){if(P.state==='bail'||P.state==='grind')return;if(!tryGrind())P.grindBuf=.2}
+const TURN_DELAY=100,used={}; // ms an arrow must be held before it moves/steers you (lets A+arrow tricks happen first)
+const dirT={}; // when each arrow was last pressed, so A+arrow pressed almost together still counts
+function flipKind(){const now=performance.now();let k=null,bt=-1;
+ for(const n of['up','down']){const on=held.includes(n)||now-(dirT[n]||0)<90;if(on&&(dirT[n]||0)>bt){bt=dirT[n]||0;k=n}}
+ if(k)used[k]=dirT[k]; // this arrow press belongs to the trick, so it won't also steer you
+ return k==='up'?'heel':k==='down'?'shove':'kick'}
+function pressFlip(){
+ if(P.state==='ground'){if(P.z<.5)launch(175,{ollie:1,flip:flipKind()});else{P.flipBuf=.28;P.flipKind=flipKind()}}
+ else if(P.state==='air'&&P.flip<0&&!P.flipDone&&!keys.grab){
+  const rem=(P.vz+Math.sqrt(Math.max(0,P.vz*P.vz+2*G*(P.z-groundH(P.x,P.y)))))/G;
+  const k=flipKind();if(rem>=(k==='shove'?.32:.38)){startFlip(k);P.jump.ollie=true}}}
+const held=[],DIRS={left:[-1,0],right:[1,0],up:[0,-1],down:[0,1]};
+function setDir(n,on){const i=held.indexOf(n);if(on){if(i>=0)return;held.push(n);dirT[n]=performance.now()}else if(i>=0)held.splice(i,1)}
+function bail(){P.state='bail';P.bail=.9;P.vz=70;P.flip=-1;P.flipDone=false;combo=1;lastLand=-9;hud();popup('BAIL!','#ff6a5c');beep(130,.3,'sawtooth',.06,-80);
+ P.bx=P.x;P.by=P.y;P.bvx=P.vx*1.3;P.bvy=P.vy*1.3;P.vx*=.4;P.vy*=.4;P.jump=null}
+function land(g){
+ P.z=g;P.vz=0;P.land=.08;
+ if(P.flip>=0&&P.flip<.8){bail();return}
+ const flipped=P.flip>=.8||P.flipDone,j=P.jump||{};P.flip=-1;P.flipDone=false;P.state='ground';{const s=Math.hypot(P.vx,P.vy);P.vx=P.dir.x*s;P.vy=P.dir.y*s}beep(90,.07,'triangle',.09,-30);
+ best=Math.max(best,j.maxH||0);let pts=0,name='';const nm=[];
+ if(flipped){const tr=j.trick||'kick';pts+=tr==='shove'?120:150;nm.push(tr==='heel'?'HEELFLIP':tr==='shove'?'POP SHOVE-IT':'KICKFLIP')}else if(j.ollie){pts+=50;nm.push('OLLIE')}
+ if(j.grabT>=.15){pts+=100;nm.push('GRAB')}
+ if(j.grind){pts+=50+Math.round(j.glen*2);nm.push('GRIND')}
+ if(j.kicker){pts+=Math.round(j.maxH*5);if(nm.length)nm.unshift('KICKER');else nm.push('KICKER AIR')}
+ name=nm.join(' ');P.grabbing=false;
+ if(pts>0){combo=(T-lastLand<3)?combo+1:1;lastLand=T;score+=pts*combo;popup(name+' +'+pts*combo+(combo>1?'  x'+combo:''),flipped?'#e8b300':'#e0f8cf')}
+ hud();P.jump=null}
+
+function update(dt){
+ T+=dt;for(const k of['ollieBuf','flipBuf','grindBuf','crouch','land'])P[k]=Math.max(0,P[k]-dt);
+ if(P.state==='air'&&P.flip>=0){P.flip+=dt/P.fdur;if(P.flip>=1){P.flip=-1;P.flipDone=true}}
+ if(P.state==='ground'){
+  if(P.grindBuf>0&&tryGrind())P.grindBuf=0;
+ }
+ if(P.state==='ground'){
+  const onK=P.z>2&&kickerH(P.x,P.y)>2;
+  let H=null;{const now=performance.now();for(let i=held.length-1;i>=0;i--){const n=held[i];if(now-dirT[n]>=TURN_DELAY&&used[n]!==dirT[n]){H=DIRS[n];break}}}
+  let s=Math.hypot(P.vx,P.vy),push=false;
+  if(H){
+   let dot=H[0]*P.dir.x+H[1]*P.dir.y; // 1 = same way, 0 = side (steer), -1 = opposite (brake)
+   if(dot===-1&&s<4){P.dir={x:H[0],y:H[1]};s=0;dot=1} // stopped: swing around and push off
+   if(dot===0){P.dir={x:H[0],y:H[1]};dot=1}            // steer: turn 90 degrees, keep speed
+   if(dot===1){if(s<PUSHMAX){s=Math.min(PUSHMAX,s+ACC*dt);push=true}}
+   else s=Math.max(0,s-BRAKE*dt);                       // braking
+  }else s=Math.max(0,s-FRIC*dt);                        // coasting
+  if(s>PUSHMAX)s=Math.max(PUSHMAX,s-FRIC*2*dt);
+  P.vx=P.dir.x*s;P.vy=P.dir.y*s;if(P.dir.x)P.face=P.dir.x;
+  let nx=P.x+P.vx*dt,c=clamp(nx,XMIN,XMAX);if(c!==nx)P.vx=0;nx=c;
+  if(groundH(nx,P.y)-P.z>2.5){P.vx=0;nx=P.x}P.x=nx;
+  let ny=P.y+P.vy*dt;c=clamp(ny,YMIN,YMAX);if(c!==ny)P.vy=0;ny=c;
+  if(groundH(P.x,ny)-P.z>2.5){P.vy=0;ny=P.y}P.y=ny;
+  const g=groundH(P.x,P.y);
+  if(g<P.z-2.5){
+   if(onK&&P.vx<-25){const b=P.ollieBuf>0||P.flipBuf>0;launch(100-P.vx+(b?75:0),{kicker:1,ollie:b,flip:P.flipBuf>0&&P.flipKind})}
+   else{P.state='air';P.vz=0;P.jump={ollie:false,kicker:false,maxH:0};P.flip=-1;P.flipDone=false}
+  }else P.z=g;
+  P.bob=push?P.bob+dt:0;
+ }else if(P.state==='air'){
+  P.vz-=G*dt;P.z+=P.vz*dt;
+  let nx=P.x+P.vx*dt,c=clamp(nx,XMIN,XMAX);if(c!==nx)P.vx=0;if(groundH(c,P.y)-P.z>3){P.vx=0;c=P.x}P.x=c;
+  let ny=P.y+P.vy*dt;c=clamp(ny,YMIN,YMAX);if(c!==ny)P.vy=0;if(groundH(P.x,c)-P.z>3){P.vy=0;c=P.y}P.y=c;
+  P.jump.maxH=Math.max(P.jump.maxH,P.z);
+  P.grabbing=!!keys.grab&&P.flip<0;if(P.grabbing)P.jump.grabT=(P.jump.grabT||0)+dt;
+  const g=groundH(P.x,P.y);if(P.z<=g){if(P.vz<=0)land(g);else P.z=g}
+  if(P.state==='air'&&P.grindBuf>0&&tryGrind())P.grindBuf=0;
+ }else if(P.state==='grind'){
+  const L=P.ledge,dx=P.gdir*P.gs*dt;P.x+=dx;P.y+=(L.y+LD/2-P.y)*Math.min(1,dt*12);P.z+=(LH-P.z)*Math.min(1,dt*20);P.vx=P.gdir*P.gs;P.vy=0;P.face=P.gdir;
+  P.jump.glen+=Math.abs(dx);P.bob+=dt;
+  if(P.bob>.09){P.bob=0;beep(180+Math.random()*120,.05,'sawtooth',.025,60)}
+  if(P.x>L.x+L.w||P.x<L.x){P.state='air';P.vz=60;P.ledge=null;P.crouch=.05;P.bob=0}
+ }else{ // bail
+  P.bail-=dt;P.vz-=G*dt;P.z=Math.max(groundH(P.x,P.y),P.z+P.vz*dt);if(P.z<=groundH(P.x,P.y))P.vz=0;
+  for(const o of[['x','vx',XMIN,XMAX],['y','vy',YMIN,YMAX]]){P[o[0]]=clamp(P[o[0]]+P[o[1]]*dt,o[2],o[3])}
+  const s=Math.hypot(P.vx,P.vy);if(s>0){const n=Math.max(0,s-220*dt)/s;P.vx*=n;P.vy*=n}
+  P.bx=clamp(P.bx+P.bvx*dt,XMIN,XMAX);P.by=clamp(P.by+P.bvy*dt,YMIN,YMAX);
+  const bs=Math.hypot(P.bvx,P.bvy);if(bs>0){const n=Math.max(0,bs-120*dt)/bs;P.bvx*=n;P.bvy*=n}
+  if(P.bail<=0){P.state='ground';P.vx=P.vy=0}
+ }
+}
+
+function drawBoard(cx,cy,tilt,fp,kind){
+ ctx.save();ctx.translate(Math.round(cx),Math.round(cy));
+ if(fp>=0&&kind==='shove'){ // pop shove-it: board spins 180 degrees flat (seen edge-on halfway)
+  ctx.rotate(tilt);const c=Math.cos(fp*Math.PI),w=Math.max(2,Math.round(8*Math.abs(c)));ctx.drawImage(board,0,0,8,3,-(w>>1),-1,w,3)}
+ else if(fp>=0){ // kickflip / heelflip: board rolls along its length, opposite directions
+  const sg=kind==='heel'?-1:1,a=fp*Math.PI*2*sg,c=Math.cos(a),h=Math.max(1,Math.round(3*Math.abs(c))),oy=Math.round(Math.sin(a)*1.5);
+  ctx.rotate(tilt+sg*.25*Math.sin(fp*Math.PI));ctx.translate(0,oy);
+  if(h===1)ctx.drawImage(board,0,1,8,1,-4,0,8,1);else ctx.drawImage(c>=0?board:boardF,0,0,8,3,-4,-Math.floor(h/2),8,h)}
+ else{ctx.rotate(tilt);ctx.drawImage(board,-4,-1)}
+ ctx.restore()}
+
+function drawPlayer(){
+ const fx=Math.round(P.x),gh=groundH(P.x,P.y),fyg=Math.round(P.y-gh),fy=Math.round(P.y-P.z);
+ const rx=Math.max(3,Math.round(6-Math.max(0,P.z-gh)/10));
+ ctx.fillStyle='rgba(7,24,33,.45)';ctx.fillRect(fx-rx,fyg-1,rx*2,1);ctx.fillRect(fx-rx+1,fyg,rx*2-2,1);
+ if(P.state==='bail'){
+  const a=Math.PI/2*Math.min(1,(.9-P.bail)/.15)*P.face;
+  ctx.save();ctx.translate(fx,fy-3);ctx.rotate(a);ctx.drawImage(pl,0,0,24,20,-12,-20,24,20);ctx.restore();
+  ctx.fillStyle='rgba(7,24,33,.45)';ctx.fillRect(Math.round(P.bx)-3,Math.round(P.by),6,1);
+  drawBoard(P.bx,P.by-1,0,-1);return}
+ let lift=0,dy=0,tilt=0,bUp=0;
+ if(P.state==='air'){lift=P.crouch>0?-1:2;tilt=-.5*clamp(P.vz/200,-1,1);if(P.grabbing){lift=0;bUp=4;tilt*=.4}}
+ else if(P.state==='grind')dy=1;
+ else{if(P.land>0)dy=1;else if(P.bob>0&&(P.bob%.3)<.15)dy=-1}
+ ctx.save();ctx.translate(fx,0);ctx.scale(P.face,1);ctx.translate(-fx,0);
+ ctx.drawImage(pl,0,0,24,20,fx-12,fy-22-lift+dy,24,20);
+ drawBoard(fx,fy-1-(P.flip>=0?2:0)-bUp,tilt,P.flip,P.trick);
+ if(P.grabbing){ctx.fillStyle='#071821';ctx.fillRect(fx+3,fy-bUp-4,3,3);ctx.fillStyle='#e0f8cf';ctx.fillRect(fx+4,fy-bUp-4,2,2)}
+ if(P.state==='grind')for(let i=0;i<4;i++){ctx.fillStyle=i&1?'#e8b300':'#e0f8cf';ctx.fillRect(fx-5-Math.floor(Math.random()*6),fy-1-Math.floor(Math.random()*4),1,1)}
+ ctx.restore()}
+
+function drawLedge(l){
+ if(ledgeImg){ctx.drawImage(ledgeImg,l.x,l.y+LD-ledgeImg.height);return} // sprite sits with its bottom-left at the ledge footprint
+ const ty=l.y-LH;
+ ctx.fillStyle='#071821';ctx.fillRect(l.x-1,ty-1,l.w+2,LD+LH+2);
+ ctx.fillStyle='#a9bb9c';ctx.fillRect(l.x,ty,l.w,LD);
+ ctx.fillStyle='#565a52';ctx.fillRect(l.x,ty+LD,l.w,LH);
+ ctx.fillStyle='#e0f8cf';ctx.fillRect(l.x,ty,l.w,1)}
+
+function draw(){
+ const tx=clamp(P.x-VW/2,0,WW-VW),ty=clamp(P.y-10-VH/2,0,WH-VH);
+ if(camX===null){camX=tx;camY=ty}else{camX+=(tx-camX)*.12;camY+=(ty-camY)*.12}
+ const cx=Math.round(camX),cy=Math.round(camY);
+ ctx.imageSmoothingEnabled=false;ctx.drawImage(world,cx,cy,VW,VH,0,0,VW,VH);
+ ctx.save();ctx.translate(-cx,-cy);
+ for(const k of K)if(P.y>=k.y+14)ctx.drawImage(kk,k.x,k.y); // kickers behind the player
+ for(const l of LEDGES)if(P.y>=l.y+LD/2)drawLedge(l);
+ drawPlayer();
+ for(const l of LEDGES)if(P.y<l.y+LD/2)drawLedge(l);
+ for(const k of K)if(P.y<k.y+14)ctx.drawImage(kk,k.x,k.y);  // kickers in front of the player
+ ctx.restore()}
+
+// ---- controls: edit these to rebind ----
+const BIND={ollie:'KeyS',flip:'KeyA',grab:'KeyD',grind:'KeyW',reset:'KeyR'};
+const keys={},MOVE={ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down'};
+addEventListener('keydown',e=>{
+ if(MOVE[e.code]){setDir(MOVE[e.code],1);e.preventDefault()}
+ else if(e.code===BIND.ollie){if(!e.repeat)pressOllie()}
+ else if(e.code===BIND.flip){if(!e.repeat)pressFlip()}
+ else if(e.code===BIND.grab)keys.grab=1;
+ else if(e.code===BIND.grind){if(!e.repeat)pressGrind()}
+ else if(e.code===BIND.reset)reset()});
+addEventListener('keyup',e=>{if(MOVE[e.code])setDir(MOVE[e.code],0);else if(e.code===BIND.grab)keys.grab=0});
+document.querySelectorAll('#pad button').forEach(b=>{
+ b.addEventListener('pointerdown',e=>{e.preventDefault();const a=b.dataset.a;
+  if(b.dataset.k)setDir(b.dataset.k,1);else if(a==='o')pressOllie();else if(a==='f')pressFlip();else if(a==='g')keys.grab=1;else pressGrind()});
+ for(const ev of['pointerup','pointerleave','pointercancel'])b.addEventListener(ev,()=>{if(b.dataset.k)setDir(b.dataset.k,0);else if(b.dataset.a==='g')keys.grab=0})});
+
+let last=performance.now();
+(function loop(t){const dt=Math.min(.033,(t-last)/1000);last=t;update(dt);draw();requestAnimationFrame(loop)})(last);
+}
+})();
+</script></body></html>
