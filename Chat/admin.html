@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>admin</title>
+<style>
+  :root {
+    --bg: #0c0f0d;
+    --fg: #c8d3c5;
+    --dim: #5f6d5c;
+    --accent: #e6c15a;
+    --err: #e07a6b;
+    --ok: #7fc48a;
+    --line: #1c231e;
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 15px/1.5 "Cascadia Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 14px 40px; }
+  h1 { font-size: 18px; font-weight: 600; color: var(--accent); margin: 0 0 16px; }
+  [hidden] { display: none !important; }
+  label { display: block; margin: 12px 0 4px; }
+  input[type=email], input[type=password] {
+    width: 100%; background: #111612; border: 1px solid #2a352c; border-radius: 3px;
+    color: var(--fg); font: inherit; padding: 8px 10px;
+  }
+  button {
+    background: transparent; color: var(--fg); border: 1px solid #2a352c; border-radius: 3px;
+    font: inherit; padding: 4px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #141108; border-color: var(--accent); font-weight: 600; padding: 8px 18px; }
+  button.danger { color: var(--err); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .err { color: var(--err); min-height: 1.5em; margin: 10px 0; }
+  .dim { color: var(--dim); }
+  #top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+  #top h1 { margin: 0; }
+  #msg { min-height: 1.5em; margin-bottom: 8px; }
+  .user { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #2f3a31; flex: none; }
+  .dot.on { background: var(--ok); }
+  .name { font-weight: 600; min-width: 8ch; }
+  .meta { color: var(--dim); font-size: 13px; flex: 1 1 160px; }
+  .tag { color: var(--err); }
+  .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<main>
+  <section id="login" hidden>
+    <h1>Admin login</h1>
+    <label for="em">Email</label>
+    <input id="em" type="email" autocomplete="username">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password">
+    <div id="err" class="err" role="alert"></div>
+    <button id="go" class="primary" type="button">Sign in</button>
+  </section>
+
+  <section id="panel" hidden>
+    <div id="top">
+      <h1>Users</h1>
+      <span><span id="count" class="dim"></span> <button id="out" type="button">Sign out</button></span>
+    </div>
+    <div id="msg" role="status"></div>
+    <div id="list"></div>
+  </section>
+</main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getDatabase, ref, onValue, get, set, update, remove } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+const $ = id => document.getElementById(id);
+const loginEl = $("login"), panelEl = $("panel"), errEl = $("err"), msgEl = $("msg"), listEl = $("list");
+
+async function loadConfig() {
+  const res = await fetch("firebase-config.txt", { cache: "no-cache" });
+  if (!res.ok) throw new Error("firebase-config.txt not found (HTTP " + res.status + ")");
+  const text = (await res.text())
+    .split("\n")
+    .filter(l => !/^\s*(#|\/\/)/.test(l))
+    .join("\n");
+  const cfg = {};
+  for (const m of text.matchAll(/["']?(\w+)["']?\s*:\s*["']([^"']*)["']/g)) cfg[m[1]] = m[2];
+  for (const k of ["apiKey", "databaseURL", "projectId"]) {
+    if (!cfg[k] || cfg[k].startsWith("YOUR_")) throw new Error('"' + k + '" is missing in firebase-config.txt');
+  }
+  return cfg;
+}
+
+let cfg;
+try {
+  cfg = await loadConfig();
+} catch (e) {
+  loginEl.hidden = false;
+  errEl.textContent = "Config error: " + e.message;
+  throw e;
+}
+
+/* a separate named app keeps the admin login apart from the anonymous chat identity in the same browser */
+const app = initializeApp(cfg, "admin");
+const auth = getAuth(app);
+const db = getDatabase(app);
+
+let users = {};
+let blocked = {};
+let started = false;
+
+function say(text, bad) {
+  msgEl.textContent = text;
+  msgEl.className = bad ? "err" : "dim";
+}
+
+function when(u) {
+  if (u.online === true) return "online now";
+  if (!u.lastSeen) return "never seen";
+  return "last seen " + new Date(u.lastSeen).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function button(label, onClick, cls) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = label;
+  if (cls) b.className = cls;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+async function guarded(fn, okText) {
+  try { await fn(); say(okText, false); }
+  catch (e) { say("Failed: " + e.message, true); }
+}
+
+function row(id, u) {
+  const isBlocked = blocked[id] === true;
+  const el = document.createElement("div");
+  el.className = "user";
+
+  const dot = document.createElement("span");
+  dot.className = "dot" + (u.online === true ? " on" : "");
+
+  const name = document.createElement("span");
+  name.className = "name";
+  name.textContent = u.name || "(no name)";
+
+  const meta = document.createElement("span");
+  meta.className = "meta";
+  meta.textContent = "#" + id.slice(0, 6) + " · " + when(u) + (u.nameLocked ? " · name set by admin" : "");
+  if (isBlocked) {
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = " · blocked";
+    meta.appendChild(tag);
+  }
+
+  const acts = document.createElement("span");
+  acts.className = "acts";
+  acts.appendChild(button("Rename", () => {
+    const n = prompt("New name for " + (u.name || id) + "\n(2–20 characters: letters, numbers, _ - .)", u.name || "");
+    if (n === null) return;
+    const clean = n.trim();
+    if (!/^[\w\-.]{2,20}$/.test(clean)) return say("Invalid name. Use 2–20 characters: letters, numbers, _ - .", true);
+    guarded(() => update(ref(db, "users/" + id), { name: clean, nameLocked: true }), "Renamed to " + clean + ".");
+  }));
+  if (u.nameLocked) {
+    acts.appendChild(button("Unlock name", () =>
+      guarded(() => update(ref(db, "users/" + id), { nameLocked: null }), "User can change their own name again.")));
+  }
+  acts.appendChild(isBlocked
+    ? button("Unblock", () => guarded(() => remove(ref(db, "blocked/" + id)), "Unblocked."))
+    : button("Block", () => guarded(() => set(ref(db, "blocked/" + id), true), "Blocked from posting."), "danger"));
+
+  el.append(dot, name, meta, acts);
+  return el;
+}
+
+function render() {
+  const rows = Object.entries(users).map(([id, u]) => [id, u || {}]);
+  rows.sort((a, b) =>
+    (b[1].online === true) - (a[1].online === true) || (b[1].lastSeen || 0) - (a[1].lastSeen || 0));
+  $("count").textContent = rows.length + " users, " + rows.filter(r => r[1].online === true).length + " online";
+  listEl.textContent = "";
+  if (!rows.length) {
+    const p = document.createElement("p");
+    p.className = "dim";
+    p.textContent = "Nobody has joined yet.";
+    listEl.appendChild(p);
+  }
+  for (const [id, u] of rows) listEl.appendChild(row(id, u));
+}
+
+function start() {
+  if (started) return;
+  started = true;
+  onValue(ref(db, "users"), snap => { users = snap.val() || {}; render(); }, e => say("Cannot read users: " + e.message, true));
+  onValue(ref(db, "blocked"), snap => { blocked = snap.val() || {}; render(); }, e => say("Cannot read blocked list: " + e.message, true));
+}
+
+onAuthStateChanged(auth, async user => {
+  if (!user) {
+    panelEl.hidden = true;
+    loginEl.hidden = false;
+    return;
+  }
+  try {
+    await get(ref(db, "blocked")); /* only the admin account may read this */
+  } catch (e) {
+    errEl.textContent = "This account is not the admin.";
+    await signOut(auth);
+    return;
+  }
+  loginEl.hidden = true;
+  panelEl.hidden = false;
+  start();
+});
+
+async function login() {
+  errEl.textContent = "";
+  try {
+    await signInWithEmailAndPassword(auth, $("em").value.trim(), $("pw").value);
+    $("pw").value = "";
+  } catch (e) {
+    errEl.textContent = "Sign-in failed. Check the email and password.";
+  }
+}
+$("go").addEventListener("click", login);
+$("pw").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
+$("out").addEventListener("click", () => signOut(auth));
+</script>
+</body>
+</html>

@@ -32,6 +32,7 @@
     color: var(--fg); font: inherit; caret-color: var(--accent);
   }
   #in:focus-visible { outline: 0; }
+  #in::placeholder { color: var(--err); }
 
   #gate {
     position: fixed; inset: 0; z-index: 10; background: var(--bg);
@@ -71,7 +72,7 @@
       <li>This is a small private chat. Everyone who has the link can read and post, and only the latest 100 messages are kept.</li>
       <li>Do not post explicit, illegal, hateful or abusive content, or anyone's personal information.</li>
       <li>Do not share passwords or anything private. Nothing here is secret.</li>
-      <li>The owner can delete any message or remove access at any time.</li>
+      <li>The owner can delete any message, rename you, or block you from posting at any time.</li>
       <li>Your nickname and messages are visible to everyone in the chat. Your browser remembers your nickname on this device.</li>
     </ul>
     <label for="gate-nick">Choose a nickname</label>
@@ -85,26 +86,11 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getDatabase, ref, push, query, limitToLast, orderByKey, endBefore,
-  onChildAdded, onChildRemoved, onValue, get, remove, serverTimestamp
+  onChildAdded, onChildRemoved, onValue, onDisconnect, get, update, remove, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
-
-/* Firebase settings are read from firebase-config.txt (same folder as this file) */
-async function loadConfig() {
-  const res = await fetch("firebase-config.txt", { cache: "no-cache" });
-  if (!res.ok) throw new Error("firebase-config.txt not found (HTTP " + res.status + ")");
-  const text = (await res.text())
-    .split("\n")
-    .filter(l => !/^\s*(#|\/\/)/.test(l))
-    .join("\n");
-  const cfg = {};
-  for (const m of text.matchAll(/["']?(\w+)["']?\s*:\s*["']([^"']*)["']/g)) cfg[m[1]] = m[2];
-  for (const k of ["apiKey", "databaseURL", "projectId"]) {
-    if (!cfg[k] || cfg[k].startsWith("YOUR_")) throw new Error('"' + k + '" is missing in firebase-config.txt');
-  }
-  return cfg;
-}
 
 const KEEP = 100;
 const logEl = document.getElementById("log");
@@ -129,7 +115,7 @@ let nick = "";
 try { nick = localStorage.getItem("chat-nick") || ""; } catch (e) {}
 if (!nick) nick = "guest" + Math.floor(100 + Math.random() * 900);
 function setNick(n) {
-  nick = n.replace(/[^\w\-.]/g, "").slice(0, 20) || nick;
+  nick = String(n).replace(/[^\w\-.]/g, "").slice(0, 20) || nick;
   try { localStorage.setItem("chat-nick", nick); } catch (e) {}
   promptEl.textContent = nick + " >";
 }
@@ -176,6 +162,22 @@ function colorFor(name) {
   return `hsl(${h} 55% 65%)`;
 }
 
+/* Firebase settings are read from firebase-config.txt (same folder as this file) */
+async function loadConfig() {
+  const res = await fetch("firebase-config.txt", { cache: "no-cache" });
+  if (!res.ok) throw new Error("firebase-config.txt not found (HTTP " + res.status + ")");
+  const text = (await res.text())
+    .split("\n")
+    .filter(l => !/^\s*(#|\/\/)/.test(l))
+    .join("\n");
+  const cfg = {};
+  for (const m of text.matchAll(/["']?(\w+)["']?\s*:\s*["']([^"']*)["']/g)) cfg[m[1]] = m[2];
+  for (const k of ["apiKey", "databaseURL", "projectId"]) {
+    if (!cfg[k] || cfg[k].startsWith("YOUR_")) throw new Error('"' + k + '" is missing in firebase-config.txt');
+  }
+  return cfg;
+}
+
 let firebaseConfig;
 try {
   firebaseConfig = await loadConfig();
@@ -186,17 +188,91 @@ try {
 }
 
 const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
 const db = getDatabase(app);
+
+/* every browser gets a private anonymous ID, so the admin can block or rename it */
+let uid;
+try {
+  uid = (await signInAnonymously(auth)).user.uid;
+} catch (e) {
+  statusEl.textContent = "not signed in";
+  sys("Sign-in failed: " + e.message + " (enable Anonymous sign-in in Firebase Authentication)", "err");
+  throw e;
+}
+
 const messages = ref(db, "messages");
 const windowQuery = query(messages, limitToLast(KEEP));
 const nodes = new Map();
 
+/* names come from the users list, so an admin rename updates old messages too */
+let names = {};
+function refreshNames() {
+  document.querySelectorAll(".who").forEach(el => {
+    const n = names[el.dataset.uid] || el.dataset.fallback || "unknown";
+    el.textContent = "<" + n + "> ";
+    el.style.color = colorFor(n);
+  });
+}
+try {
+  await new Promise((resolve, reject) => {
+    onValue(ref(db, "users"), snap => {
+      const next = {};
+      snap.forEach(s => { next[s.key] = (s.val() || {}).name; });
+      names = next;
+      refreshNames();
+      resolve();
+    }, reject);
+  });
+} catch (e) {
+  statusEl.textContent = "error";
+  sys("Cannot read data: " + e.message + " (check the database rules)", "err");
+  throw e;
+}
+
+/* my own profile */
+const meRef = ref(db, "users/" + uid);
+let locked = false;
+try {
+  const me = (await get(meRef)).val();
+  if (me && me.nameLocked) { locked = true; setNick(me.name); }
+  else await update(meRef, { name: nick });
+} catch (e) {
+  statusEl.textContent = "error";
+  sys("Cannot save profile: " + e.message + " (check the database rules)", "err");
+  throw e;
+}
+onValue(meRef, snap => {
+  const v = snap.val();
+  if (!v) return;
+  locked = v.nameLocked === true;
+  if (v.name && v.name !== nick) setNick(v.name);
+});
+
+/* connection + presence */
 onValue(ref(db, ".info/connected"), snap => {
   const on = snap.val() === true;
   statusEl.textContent = on ? "online" : "offline";
   statusEl.className = on ? "on" : "";
+  if (on) {
+    onDisconnect(meRef).update({ online: false, lastSeen: serverTimestamp() })
+      .then(() => update(meRef, { online: true, lastSeen: serverTimestamp() }))
+      .catch(() => {});
+  }
 });
 
+/* blocked by admin? */
+let blocked = false;
+onValue(ref(db, "blocked/" + uid), snap => {
+  const now = snap.val() === true;
+  if (now !== blocked) {
+    blocked = now;
+    sys(now ? "The admin has blocked you from posting." : "You can post again.", now ? "err" : "sys");
+  }
+  inEl.placeholder = blocked ? "posting is disabled" : "";
+});
+
+/* messages */
 onChildAdded(windowQuery, snap => {
   const m = snap.val();
   if (!m || typeof m.text !== "string") return;
@@ -207,13 +283,15 @@ onChildAdded(windowQuery, snap => {
   ts.className = "ts";
   ts.textContent = t.toTimeString().slice(0, 5) + " ";
   const who = document.createElement("span");
-  who.style.color = colorFor(String(m.name));
-  who.textContent = "<" + m.name + "> ";
+  who.className = "who";
+  who.dataset.uid = m.uid || "";
+  who.dataset.fallback = m.name || "";
   const body = document.createElement("span");
   body.textContent = m.text;
   d.append(ts, who, body);
   nodes.set(snap.key, d);
   addLine(d);
+  refreshNames();
 });
 
 onChildRemoved(windowQuery, snap => {
@@ -234,11 +312,25 @@ async function trim() {
 }
 
 async function send(text) {
+  if (blocked) return sys("You are blocked from posting.", "err");
   try {
-    await push(messages, { name: nick, text, ts: serverTimestamp() });
+    await push(messages, { uid, text, ts: serverTimestamp() });
     trim();
   } catch (e) {
     sys("send failed: " + e.message, "err");
+  }
+}
+
+async function rename(n) {
+  const clean = n.replace(/[^\w\-.]/g, "").slice(0, 20);
+  if (clean.length < 2) return sys("usage: /nick <name>  (2–20 characters: letters, numbers, _ - .)", "err");
+  if (locked) return sys("Your name was set by the admin and can't be changed.", "err");
+  try {
+    await update(meRef, { name: clean });
+    setNick(clean);
+    sys("you are now " + clean);
+  } catch (e) {
+    sys("can't change name: " + e.message, "err");
   }
 }
 
@@ -246,9 +338,7 @@ function command(line) {
   const [cmd, ...rest] = line.slice(1).split(" ");
   const arg = rest.join(" ").trim();
   if (cmd === "nick") {
-    if (!arg) return sys("usage: /nick <name>");
-    setNick(arg);
-    sys("you are now " + nick);
+    rename(arg);
   } else if (cmd === "clear") {
     logEl.textContent = "";
     nodes.clear();
