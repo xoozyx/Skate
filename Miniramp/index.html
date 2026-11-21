@@ -2,14 +2,14 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mini Ramp</title>
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>@font-face{font-family:'Press Start 2P';src:local('Press Start 2P'),url('assets/fonts/PressStart2P-Regular.ttf') format('truetype');font-display:swap}</style>
 <style>
 :root{--bg:#071821;--fg:#a9bb9c;--hi:#e0f8cf;--mid:#42463f;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#071821}}
 :root[data-theme="dark"]{--bg:#071821}
 html,body{margin:0;min-height:100%;background:var(--bg);color:var(--fg);font-family:'Press Start 2P',monospace}
 body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:8px}
-canvas{width:min(100%,960px);aspect-ratio:8/5;image-rendering:pixelated;display:block;background:var(--bg);border:4px solid var(--mid);box-sizing:border-box}
+canvas{image-rendering:pixelated;display:block;background:var(--bg);box-shadow:0 0 0 4px var(--mid)}
 .pad{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
 button{font:inherit;font-size:12px;padding:12px 14px;background:var(--mid);color:var(--hi);border:2px solid var(--fg);touch-action:manipulation;user-select:none;-webkit-user-select:none}
 button:active{background:var(--hi);color:var(--bg)}
@@ -19,82 +19,115 @@ p{font-size:9px;line-height:1.8;margin:0;text-align:center;max-width:90%}
 <canvas id="c" width="240" height="150"></canvas>
 <div class="pad">
 <button data-k="l">&#9664;</button><button data-k="r">&#9654;</button><button data-k="u">&#9650;</button><button data-k="n">&#9660;</button>
-<button data-k="a">A STALL</button><button data-k="z">GRAB</button><button data-k="x">FLIP</button><button data-k="c">360</button><button data-k="s">START</button><button id="bgb">BG IMAGE</button><button id="bgr">BG RESET</button><input type="file" id="bgf" accept="image/*" hidden>
+<button data-k="w">W STALL</button><button data-k="a">A FLIP</button><button data-k="p">S SPIN</button><button data-k="d">D GRAB</button><button data-k="s">START</button><button id="menub">MENU</button><button id="bgb">BG IMAGE</button><button id="bgr">BG RESET</button><input type="file" id="bgf" accept="image/*" hidden>
 </div>
-<p>Left/right: pump, and lean in the air. Up/down: ride toward the back or front of the ramp. Z grab, X kickflip, C 360 spin. A at the coping: rock stall (hold it, release to drop in). BG IMAGE loads your own 240x138 PNG as the background. After START you pick your gear.</p>
+<p>Left/right: pump, and lean in the air. Up/down: ride toward the back or front of the ramp. Esc or the MENU button returns to the main menu. A kickflip (A+right heelflip, A+down shove-it, A+up FS shove-it): hold A or tap it again to keep flipping (double, triple, quad flips; 360, 540... shove-its). D grab (D+down indy, D+up melon, D+right nose, D+left tail). S spin: hold S to keep spinning (every 180 counts, up to 1440) and release to finish the turn; each tap also adds 180. Near the coping press W. If you are moving toward the back or front of the ramp (up/down while riding or in the air), W = 50-50 grind, W+right = nose slide, W+left = tail slide: they slide along the coping. If you are not moving that way, W = rock stall, W+right = nose stall, W+left = tail stall (keep the balance marker off the far end with left/right). Release W to drop in. After START you pick a level (big or half-size ramp), then your gear. BG IMAGE loads your own 240x138 PNG as the background.</p>
 <script>
-const cv=document.getElementById('c'),g=cv.getContext('2d');g.imageSmoothingEnabled=false;
-const W=240,H=150,HY=138,FL=108,R=44,YC=FL-R,CX1=80,CX2=160,LIP=40,G=330,DECK=YC-6,DP=30;
+const cv=document.getElementById('c');let g=cv.getContext('2d');g.imageSmoothingEnabled=false;
+// pixel-perfect scaling: the canvas is always shown at a whole-number multiple of its size in device pixels
+function fit(){const dpr=devicePixelRatio||1,rest=[...document.body.children].filter(e=>e!==cv&&e.offsetHeight>0).reduce((a,e)=>a+e.offsetHeight+12,0),
+ aw=Math.min(innerWidth-24,1400),ah=innerHeight-rest-36,k=Math.max(1,Math.floor(Math.min(aw*dpr/240,ah*dpr/150)));
+ cv.style.width=(240*k/dpr)+'px';cv.style.height=(150*k/dpr)+'px'}
+const W=240,H=150,HY=138,FL=108,G=330,DP=30;
+let R=44,CX1=80,CX2=160,YC=FL-R,DECK=YC-6,LO=CX1-R,HI=CX2+R,VMAX=232,lvi=0; // ramp geometry: changed by setLevel()
 const PD='#071821',PG='#42463f',PL='#a9bb9c',PW='#e0f8cf';
 const cl=(v,a,b)=>Math.max(a,Math.min(b,v));
-const keys={u:0,n:0,l:0,r:0,a:0,z:0,x:0,c:0,s:0};
-const KM={ArrowLeft:'l',ArrowRight:'r',a:'a',ArrowUp:'u',ArrowDown:'n',w:'u',s:'n',z:'z',x:'x',c:'c',' ':'s'};
-addEventListener('keydown',e=>{const k=KM[e.key.length>1?e.key:e.key.toLowerCase()];if(k){keys[k]=1;if(k=='s'&&!e.repeat)start();if(state=='gear'&&!e.repeat)menuKey(k);e.preventDefault()}});
+const keys={u:0,n:0,l:0,r:0,w:0,a:0,d:0,p:0,s:0};
+const KM={ArrowLeft:'l',ArrowRight:'r',ArrowUp:'u',ArrowDown:'n',w:'w',a:'a',s:'p',d:'d',' ':'s'}; // W stall/grind, A flip, S spin (180/360), D grab, Space start
+addEventListener('keydown',e=>{const k=KM[e.key.length>1?e.key:e.key.toLowerCase()];if(k){keys[k]=1;if(k=='s'&&!e.repeat)start();if(state=='gear'&&!e.repeat)menuKey(k);if(state=='level'&&!e.repeat)levelKey(k);e.preventDefault()}});
 addEventListener('keyup',e=>{const k=KM[e.key.length>1?e.key:e.key.toLowerCase()];if(k)keys[k]=0});
 document.querySelectorAll('button[data-k]').forEach(b=>{const k=b.dataset.k;
- b.addEventListener('pointerdown',e=>{e.preventDefault();keys[k]=1;if(k=='s')start();if(state=='gear')menuKey(k)});
+ b.addEventListener('pointerdown',e=>{e.preventDefault();keys[k]=1;if(k=='s')start();if(state=='gear')menuKey(k);if(state=='level')levelKey(k)});
  ['pointerup','pointerleave','pointercancel'].forEach(t=>b.addEventListener(t,()=>keys[k]=0));
 });
-const sx=x=>cl(x,37,203);
+const sx=x=>cl(x,LO+1,HI-1);
 function surf(x){x=sx(x);if(x>=CX1&&x<=CX2)return FL;const d=x-(x<CX1?CX1:CX2);return YC+Math.sqrt(R*R-d*d)}
 function slope(x){x=sx(x);if(x>=CX1&&x<=CX2)return 0;const d=x-(x<CX1?CX1:CX2);return -d/Math.sqrt(R*R-d*d)}
 
 let P,state='title',score=0,time=60,pop={t:9,s:''},tt=0;
-function reset(){P={x:36,y:DECK-4,z:.5,v:0,vx:0,vy:0,air:0,rot:0,dir:1,lean:0,spin:0,spinOn:0,flip:0,flipOn:0,lx:0,lc:0,la:0,stall:1,stT:.2,out:0,sx:36,drop:1,dropT:0,grab:0,gt:0,at:0,done:[],bail:0,bt:0};score=0;time=60;pop={t:9,s:''}}
-function start(){if(state=='gear'){reset();state='play'}else if(state!='play')state='gear'}
+function reset(){P={x:LO,y:DECK,z:.5,v:0,vx:0,vy:0,air:0,rot:0,dir:1,lean:0,spin:0,spinOn:0,flip:0,flipOn:0,lx:0,lc:0,la:0,stall:1,stT:.2,out:0,sx:LO,drop:1,dropT:0,sd:[0,0],sg:[0,0],g50:0,sl:0,hv:0,zv:0,zp:.5,grab:0,gt:0,at:0,done:[],bail:0,bt:0};score=0;time=60;pop={t:9,s:''}}
+function start(){if(state=='gear'){reset();state='play'}else if(state=='level')state='gear';else if(state!='play')state='level'}
 reset();
 
+function startStall(p,g50){
+  p.gzv=g50?(keys.n?1:keys.u?-1:p.zv>0?1:p.zv<0?-1:(p.z<.5?1:-1))*(.22+(p.air?p.hv:Math.abs(p.v))/205*.45):0;
+  p.h0=Math.max(DECK-p.y,6);p.fv=p.air?Math.max(0,p.vy):0;p.hi=p.air&&p.y<DECK-6;p.fT=(-p.fv+Math.sqrt(p.fv*p.fv+2*495*p.h0))/495;p.sr=cl((p.air?Math.hypot(p.vx,p.vy):Math.abs(p.v))/110,.5,2.5);(g50?p.sg:p.sd)[p.x<120?0:1]=1;p.g50=!!g50;p.sl=g50?(p.wDir>0?2:p.wDir<0?3:1):0;p.sk=g50?0:p.wDir>0?1:p.wDir<0?2:0;p.bm=0;p.bv=Math.random()<.5?-.5:.5;p.ph=Math.random()*6.28;p.doom=0;p.la=1;p.stall=1;p.stT=0;p.out=0;p.sx=p.x<120?LO:HI;p.dir=p.sx<120?1:-1;
+  p.spinOn=p.flipOn=0;p.spin=p.flip=0;p.grab=0;p.gt=0;pop={t:0,s:g50?['50-50 GRIND!','NOSE SLIDE!','TAIL SLIDE!'][p.sl-1]:['ROCK STALL!','NOSE STALL!','TAIL STALL!'][p.sk]};
+}
+// can he get up to the coping? (energy check: climb height vs his speed)
+function stallOK(p){const hh=p.y-(DECK-3);if(hh<=0)return true;
+ if(!p.air&&!(p.x<120?p.v<0:p.v>0))return false;
+ const sp=p.air?Math.max(0,-p.vy):Math.abs(p.v);return sp*sp>=2*(p.air?G*.9:G)*hh}
 function upd(dt){const p=P;
- if(state=='title'||state=='gear')return;
+ if(state=='title'||state=='level'||state=='gear')return;
+ p.zv+=((p.z-p.zp)/Math.max(dt,.001)-p.zv)*.3;p.zp=p.z; // how fast he is moving toward the back/front of the ramp
  if(state=='play'){time-=dt;if(time<=0){time=0;state='over'}}
  if(p.bail)p.bt+=dt;
  const ctl=state=='play'&&!p.bail;
  if(p.air||Math.abs(p.v)>60)p.dm=1;else if(Math.abs(p.v)<35)p.dm=0;
- if(ctl&&!p.stall&&p.dm)p.z=cl(p.z+(keys.n-keys.u)*(p.air?.9:(.3+Math.abs(p.v)/177)*1.2)*dt,0,1);
- if(!keys.a)p.la=0;
+ if(ctl&&!p.stall&&p.dm&&!(p.air&&(keys.a||keys.d)))p.z=cl(p.z+(keys.n-keys.u)*(p.air?.9:(.3+Math.abs(p.v)/177)*1.2)*dt,0,1);
+ if(!keys.w)p.la=0;
+
  if(p.stall){
-  p.stT+=dt;p.x=p.sx;p.y=DECK-4;p.v=0;
-  if(p.out>0){p.out-=dt;if(p.out<=0){const L=p.sx<120;p.stall=0;p.air=1;p.vx=L?25:-25;p.vy=-30;p.at=0;p.lean=0;if(p.drop){p.air=0;p.x=L?37.6:202.4;p.y=surf(p.x);p.v=L?40:-40;p.rot=Math.atan(slope(p.x));p.vy=0;p.spinOn=p.flipOn=0;p.spin=p.flip=0;p.gt=0;p.done=[]}if(!p.drop)p.done.push(['ROCK STALL',150+Math.floor(p.stT*250)]);p.drop=0}}
+  p.stT+=dt;p.x=p.sx;p.y=DECK;p.v=0;
+  if(p.g50&&(!p.hi||p.stT>=p.fT)){p.gzv+=((keys.n?1:0)-(keys.u?1:0))*1.6*dt;p.gzv*=1-.25*dt;p.z=cl(p.z+p.gzv*dt,0,1)}
+  if(p.out>0){p.out-=dt;if(p.out<=0){const L=p.sx<120;p.stall=0;p.air=1;p.vx=L?25:-25;p.vy=-30;p.at=0;p.lean=0;if(p.drop){p.air=0;p.x=L?LO+1.6:HI-1.6;p.y=surf(p.x);p.v=L?40:-40;p.rot=Math.atan(slope(p.x));p.vy=0;p.spinOn=p.flipOn=0;p.spin=p.flip=0;p.gt=0;p.done=[]}if(!p.drop)p.done.push([p.sl?['50-50','NOSE SLIDE','TAIL SLIDE'][p.sl-1]:['ROCK STALL','NOSE STALL','TAIL STALL'][p.sk||0],(p.sl?(p.sl>1?220:200):p.sk?180:150)+Math.floor(p.stT*(p.sl?(p.sl>1?330:300):p.sk?280:250))]);p.drop=0}}
   else if(p.drop){p.dropT+=dt;if(p.dropT>.8&&state=='play'){p.out=.25;pop={t:0,s:'DROP IN!'}}}
-  else if((!keys.a&&p.stT>.3)||p.stT>2.5||state!='play'){p.oT=.2/p.sr;p.out=p.oT}
+  else if((!keys.w&&p.stT>.3)||p.stT>6||state!='play'){p.oT=.2/p.sr;p.out=p.oT}
+  else if(p.sl){if((!p.hi||p.stT>=p.fT)&&(p.z<=0||p.z>=1||Math.abs(p.gzv)<.12)){p.oT=.2/p.sr;p.out=p.oT}}
+  else if(!p.hi||p.stT>=p.fT){ // balance: marker drifts, left/right pushes it back
+   p.bv+=((Math.random()-.5)*48*(1+p.stT*.4)+Math.sin(p.stT*2.3+p.ph)*2.2+(keys.r-keys.l)*9)*dt;p.bv*=1-1.2*dt;p.bm+=p.bv*dt;
+   const e=p.bm*(p.sx<120?1:-1);
+   if(e>=1){p.bm=p.sx<120?1:-1;p.oT=.2/p.sr;p.out=p.oT}
+   else if(e<=-1){const L=p.sx<120;p.stall=0;p.air=1;p.vx=L?18:-18;p.vy=-20;p.at=0;p.doom=1;p.done=[];p.spinOn=p.flipOn=0;p.spin=p.flip=0;p.gt=0;pop={t:0,s:'LOST BALANCE!'}}
+  }
   return;
  }
- if(ctl&&keys.a&&!p.la&&(p.x<=46||p.x>=194)&&p.y>=20&&p.y<=86){
-  p.h0=Math.max(DECK-4-p.y,6);p.fv=p.air?Math.max(0,p.vy):0;p.hi=p.air&&p.y<DECK-6;p.fT=(-p.fv+Math.sqrt(p.fv*p.fv+2*495*p.h0))/495;p.sr=cl((p.air?Math.hypot(p.vx,p.vy):Math.abs(p.v))/110,.5,2.5);p.la=1;p.stall=1;p.stT=0;p.out=0;p.sx=p.x<120?36:204;p.dir=p.sx<120?1:-1;
-  p.spinOn=p.flipOn=0;p.spin=p.flip=0;p.grab=0;p.gt=0;pop={t:0,s:'ROCK STALL!'};
+ if(!keys.w)p.wp=0;else if(!p.wp){p.wp=1;p.wMov=Math.abs(p.zv)>.12||((keys.u||keys.n)&&(p.air||p.dm));p.wDir=keys.r?1:keys.l?-1:0} // what was held the moment W went down decides the stall
+ if(ctl&&keys.w&&!p.la&&(p.x<=LO+10||p.x>=HI-10)&&p.y>=20){
+  const sd=p.x<120?0:1,gr=!!p.wMov;
+  if(gr?p.sg[sd]:p.sd[sd]){p.la=1;pop={t:0,s:'ALREADY DONE'}}
+  else if(!stallOK(p)){p.la=1;pop={t:0,s:'NEED SPEED'}}
+  else startStall(p,gr);
  }
  if(!p.air){
   const s=slope(p.x),n=Math.hypot(1,s);
   p.v+=G*s/n*dt;p.v*=1-(p.bail?2.5:.2)*dt;
   if(ctl)p.v+=(keys.r-keys.l)*150*dt;
-  p.v=cl(p.v,-205,205);
-  p.x=cl(p.x+p.v/n*dt,36.5,203.5);
+  p.v=cl(p.v,-VMAX,VMAX);p.hv=Math.abs(p.v);
+  p.x=cl(p.x+p.v/n*dt,LO+.5,HI-.5);
   if(Math.abs(p.v)>5)p.dir=Math.sign(p.v);
   p.y=surf(p.x);
+  if(p.x>=CX1&&p.x<=CX2){p.sd=[0,0];p.sg=[0,0]}
   p.rot+=(Math.atan(slope(p.x))-p.rot)*Math.min(1,15*dt);
-  if(p.bail&&p.bt>1.3){const L=Math.random()<.5;Object.assign(p,{bail:0,stall:1,drop:1,dropT:0,spinOn:0,flipOn:0,spin:0,flip:0,gt:0,done:[],stT:.2,out:0,sx:L?36:204,x:L?36:204,y:DECK-4,z:.5,v:0,rot:0,dir:L?1:-1,grab:0,lean:0})}
-  if(ctl&&((p.x<=LIP&&p.v<0)||(p.x>=W-LIP&&p.v>0))){
+  if(p.bail&&p.bt>1.3){const L=Math.random()<.5;Object.assign(p,{bail:0,stall:1,drop:1,dropT:0,sd:[0,0],sg:[0,0],g50:0,sl:0,hv:0,zv:0,zp:.5,spinOn:0,flipOn:0,spin:0,flip:0,gt:0,done:[],stT:.2,out:0,sx:L?LO:HI,x:L?LO:HI,y:DECK,z:.5,v:0,rot:0,dir:L?1:-1,grab:0,lean:0})}
+  if(ctl&&((p.x<=LO+4&&p.v<0)||(p.x>=HI-4&&p.v>0))){
    const s2=slope(p.x),n2=Math.hypot(1,s2);
    Object.assign(p,{air:1,vx:p.v/n2*.12,vy:p.v*s2/n2,spin:0,spinOn:0,flip:0,flipOn:0,gt:0,at:0,done:[],lean:0,lx:0,lc:0});
   }
  }else{
-  p.at+=dt;p.vy+=G*.9*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;
-  if(p.x<37||p.x>203){p.x=cl(p.x,37,203);p.vx=0}
+  p.hv*=1-2*dt;p.at+=dt;p.vy+=G*.9*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;
+  if(p.x<LO+1||p.x>HI-1){p.x=cl(p.x,LO+1,HI-1);p.vx=0}
   
   
   p.rot+=((p.x<120?1:-1)*Math.PI/2-p.rot)*Math.min(1,14*dt);
-  p.grab=cl(p.grab+(keys.z?8:-8)*dt,0,1);if(p.grab>.6)p.gt+=dt;
-  if(!keys.x)p.lx=0;if(!keys.c)p.lc=0;
-  if(keys.x&&!p.flipOn&&!p.lx){p.flipOn=1;p.lx=1;p.flip=0}
-  if(keys.c&&!p.spinOn&&!p.lc){p.spinOn=1;p.lc=1;p.spin=0}
-  if(p.flipOn){p.flip+=dt*2.2;if(p.flip>=1){p.flipOn=0;p.flip=0;p.done.push(['KICKFLIP',300])}}
-  if(p.spinOn){p.spin+=dt*1.6;if(p.spin>=1){p.spinOn=0;p.spin=0;p.done.push(['360',500])}}
+  if(keys.d)p.gk=keys.l?3:keys.r?2:keys.u?1:0; // D / D+down indy, D+up melon, D+right nose, D+left tail
+  p.grab=cl(p.grab+(keys.d?8:-8)*dt,0,1);if(p.grab>.6)p.gt+=dt;
+  if(!keys.a)p.lx=0;if(!keys.p)p.lc=0;
+  if(keys.a&&!p.lx){p.lx=1;if(!p.flipOn){p.flipOn=1;p.flip=0;p.fN=1;p.fk=keys.u?3:keys.n?2:keys.r?1:0}else p.fN=Math.min(p.fk<2?4:6,p.fN+1)} // A+up FS shove-it, A+down shove-it, A+right heelflip, A / A+left kickflip
+  if(keys.p&&!p.lc){p.lc=1;if(!p.spinOn){p.spinOn=1;p.spin=0;p.sT=.5}else p.sT=Math.min(4,p.sT+.5)}
+  if(p.flipOn){const k=p.fk;p.flip+=dt*[2.2,2.2,2.8,2.8][k]*(1+.12*p.fN);
+   if(p.flip>=p.fN){if(keys.a&&p.fN<(k<2?4:6))p.fN++; // holding A keeps him flipping
+    else{const n=p.fN,nm=k<2?['','DOUBLE ','TRIPLE ','QUAD '][n-1]+['KICKFLIP','HEELFLIP'][k]:(n>1?n*180+' ':'')+['SHOVE-IT','FS SHOVE-IT'][k-2],base=[300,350,250,300][k];
+     p.flipOn=0;p.flip=0;p.done.push([nm,Math.round(base*n*(1+(k<2?.25:.2)*(n-1)))])}}}
+  if(p.spinOn){p.spin+=dt*(1.5+p.sT*.35);if(p.spin>=p.sT){if(keys.p&&p.sT<4)p.sT=Math.min(4,p.sT+.5); // holding S keeps him spinning
+   else{const k=Math.round(p.sT*2);p.spinOn=0;p.spin=0;p.done.push([''+(k*180),[250,500,800,1200,1700,2300,3000,3800][k-1]])}}}
   if(p.vy>0&&p.y>=surf(p.x)){
    const s=slope(p.x),n=Math.hypot(1,s);p.air=0;p.y=surf(p.x);p.v=(p.vx+p.vy*s)/n;
-   if(p.flipOn||p.spinOn||p.grab>.5){
-    p.bail=1;p.bt=0;p.v*=.4;p.spin=p.flip=0;p.spinOn=p.flipOn=0;p.grab=0;p.gt=0;p.done=[];pop={t:0,s:'WIPEOUT!'};
+   if(p.flipOn||p.spinOn||p.grab>.5||p.doom){
+    p.bail=1;p.bt=0;p.v*=.4;p.spin=p.flip=0;p.spinOn=p.flipOn=0;p.grab=0;p.gt=0;p.done=[];p.doom=0;pop={t:0,s:'WIPEOUT!'};
    }else{
-    const d=p.done.slice();if(p.gt>.3)d.push(['GRAB',Math.floor(p.gt*250)]);
+    const d=p.done.slice();if(p.gt>.3){const k=p.gk||0;d.push([['INDY','MELON','NOSE','TAIL'][k],Math.floor(p.gt*[250,300,300,300][k])])}
     if(d.length){const pts=d.reduce((a,b)=>a+b[1],0)*d.length;score+=pts;pop={t:0,s:d.map(x=>x[0]).join('+')+' +'+pts}}
     else if(p.at>.6){const pts=Math.floor(p.at*50);score+=pts;pop={t:0,s:'AIR +'+pts}}
    }
@@ -122,11 +155,13 @@ function tilt(A,sp){const cv=document.createElement('canvas');cv.width=cv.height
  return cv}
 const BC0={},BC={};for(let a=-90;a<=20;a+=5)BC0[a]=BC[a]=tilt(a,0);
 let BD=BD0;
+const BE0=mk(['..DDDDDDDD..','.DLLLLLLLLD.','..DDDDDDDD..','.DWWD..DWWD.','.DWWD..DWWD.','..DD....DD..']);let BE=BE0; // board seen end-on (50-50 on the coping)
 const bdAt=A=>BC[cl(Math.round(A/5)*5,-90,20)];
 // key poses measured from your reference drawings (deck on the right, ramp on the left):
 // [board angle deg, board centre x, y from the coping corner, body lean toward the ramp deg]
 const KD=[[14,-5,-4,6],[-27,-7.6,.1,22],[-60,-7.9,7.6,35]];    // drop-in: tail on coping -> nose over -> board on the wall
 const KS=[[-60,-8.5,8.3,30],[-76,-5,-.3,15],[-32,-1.4,-2.8,8]]; // rock stall: up the wall -> over the coping -> settled
+const KSETS=[KS,[KS[0],KS[1],[-70,-2.7,6.5,25]],[KS[0],KS[1],[-20,-7.5,1.7,0]]]; // rock stall, nose stall (nose on the coping, board hangs down the wall), tail stall (tail on the coping, nose out over the ramp)
 const KA=[[-90,-4.9,-18,90],[-44,-2.9,-12.7,45],[-32,-1.4,-2.8,8]]; // rock stall entered from high in the air: vertical board -> tilting -> lands on the coping
 function kf(K,t){t=cl(t,0,K.length-1);const i=Math.min(K.length-2,Math.floor(t)),u=t-i,a=K[i],b=K[i+1];return a.map((v,j)=>v+(b[j]-v)*u)}
 function fline(x0,y0,x1,y1){const dx=Math.abs(x1-x0),dy=Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1;let e=dx-dy;
@@ -139,8 +174,9 @@ function pose(K,t,f,oy){let [A,cx,cy,lean]=kf(K,t);if(oy!==undefined)cy=oy;const
  const hx=(ft[0][0]+ft[1][0])/2+sl*4.5,hy=(ft[0][1]+ft[1][1])/2-cl2*4.5;
  g.fillStyle=PD;
  [-2,1].forEach((o,i)=>{fline(Math.round(hx+o*cl2),Math.round(hy+o*sl),ft[i][0],ft[i][1]);g.fillRect(ft[i][0]-1,ft[i][1]-1,3,1)});
- g.save();g.translate(Math.round(hx),Math.round(hy));g.rotate(lr);
- if(FR[f].complete)g.drawImage(FR[f],0,0,24,19,-12,-19,24,19);g.restore()}
+ if(FR[f].complete){const hxr=Math.round(hx),hyr=Math.round(hy);
+  if(lr==0)g.drawImage(FR[f],0,0,24,19,hxr-12,hyr-19,24,19);
+  else g.drawImage(rotSpr('pb|'+f+'|'+gv,48,x=>x.drawImage(FR[f],0,0,24,19,12,5,24,19),lr),hxr-24,hyr-24)}}
 
 /* ---------- static background (4-shade palette) ---------- */
 const bg=document.createElement('canvas');bg.width=W;bg.height=H;let CBG=null;
@@ -158,6 +194,10 @@ function build(){
  rc(c,PW,0,0,W,HY);rc(c,PL,0,0,W,26);dth(c,0,26,W,4,PL);dth(c,0,30,W,3,PL);
  cloud(c,16,8);cloud(c,190,5);cloud(c,120,14);cloud(c,226,18);
  for(let x=0,i=0;x<W;i++){const w=6+(i*7)%7,h=5+(i*13)%13;rc(c,PL,x,80-h,w,h);for(let j=2;j<h-1;j+=3)if((i+j)%3)rc(c,PW,x+2,80-h+j,1,1);x+=w}
+ // sun, birds, water tower
+ for(let y=-8;y<=8;y++)for(let x=-8;x<=8;x++){const d=Math.hypot(x,y);if(d<=6||(d<=8&&((x+y)&1)))rc(c,PW,208+x,26+y,1,1)}
+ [[70,20],[80,15],[92,22],[150,10],[158,14]].forEach(([x,y])=>{rc(c,PD,x,y,1,1);rc(c,PD,x+1,y+1,1,1);rc(c,PD,x+2,y,1,1);rc(c,PD,x+3,y+1,1,1);rc(c,PD,x+4,y,1,1)});
+ rc(c,PL,214,60,10,7);rc(c,PG,214,60,10,1);dth(c,215,62,8,3,PG);rc(c,PL,216,67,1,12);rc(c,PL,221,67,1,12);
  c.save();c.beginPath();[[40,82],[60,56],[92,42],[130,36],[165,42],[200,54],[228,70],[228,92],[40,92]].forEach((q,i)=>i?c.lineTo(...q):c.moveTo(...q));
  c.fillStyle=PG;c.fill();c.clip();
  dth(c,40,36,50,56,PL);dth(c,170,36,60,56,PD);dth(c,120,66,70,26,PD);
@@ -165,27 +205,40 @@ function build(){
  c.restore();
  c.font=FONT;c.textBaseline='top';c.textAlign='center';c.fillStyle=PD;c.fillText('HOLLYWOOD',121,50);c.fillStyle=PW;c.fillText('HOLLYWOOD',120,49);
  palm(c,58,86,20);palm(c,188,86,18);
+ [46,194].forEach(x=>{dth(c,x-7,53,16,6,PW);rc(c,PD,x,52,2,44);rc(c,PD,x-4,50,10,3);rc(c,PW,x-3,51,8,1)}); // street lamps
+ if(lvi==0){ // big ramp: stadium light towers and a crowd on the bleachers
+  [24,216].forEach(x=>{dth(c,x-9,4,20,14,PW);rc(c,PD,x,14,2,82);rc(c,PD,x-6,8,14,8);rc(c,PW,x-5,9,12,6);for(let i=0;i<4;i++)rc(c,PD,x-4+i*3,10,1,4)});
+  for(let i=0,x=44;x<196;i++,x+=5){const y=64+(i*3)%3;rc(c,PW,x,y,3,3);rc(c,PD,x,y,3,1);rc(c,i%2?PG:PD,x-1,y+3,5,7);if(i%4==1)rc(c,PW,x+4,y-2,1,3)}
+ }else{ // half ramp: a row of low street buildings behind the fence
+  [[62,26,14],[92,22,10],[118,30,16],[152,24,12],[180,22,15]].forEach(([x,w,h])=>{rc(c,PD,x,74-h,w,h);rc(c,PG,x+1,75-h,w-2,h-1);
+   for(let yy=77-h;yy<71;yy+=5)for(let xx=x+3;xx<x+w-3;xx+=5)rc(c,((xx+yy)%3)?PW:PD,xx,yy,2,3)});
+ }
  rc(c,PL,0,74,W,22);dth(c,0,74,W,22,PG);rc(c,PD,0,73,W,1);rc(c,PW,0,74,W,1);rc(c,PD,0,95,W,1);
  for(let x=10;x<W;x+=40)rc(c,PD,x,73,2,23);
  [[44,26,'SK8',0],[84,22,'OK',1],[116,26,'RAD',0],[150,22,'AIR',1],[176,26,'CAL',0]].forEach(([x,w,t,d])=>{
   rc(c,PD,x-1,77,w+2,13);rc(c,d?PG:PW,x,78,w,11);c.fillStyle=d?PW:PD;c.fillText(t,x+w/2+1,80)});
+ for(let x=46;x<=194;x+=6){const k=(x-46)/6|0,y=62+Math.round(Math.sin((x-46)/148*Math.PI)*5);rc(c,PD,x,y,6,1);rc(c,k%2?PW:PL,x+1,y+1,3,2);rc(c,PD,x+2,y+3,1,1)} // bunting
  if(CBG)c.drawImage(CBG,0,0,W,HY);
  // front face of the ramp: crate lattice
- c.save();c.beginPath();c.moveTo(0,DECK+D2);c.lineTo(36,DECK+D2);c.lineTo(36,YC+D2);
- for(let x=37;x<=203;x+=2)c.lineTo(x,surf(x)+D2);
- c.lineTo(204,YC+D2);c.lineTo(204,DECK+D2);c.lineTo(W,DECK+D2);c.lineTo(W,HY);c.lineTo(0,HY);c.closePath();
+ c.save();c.beginPath();c.moveTo(0,DECK+D2);c.lineTo(LO,DECK+D2);c.lineTo(LO,YC+D2);
+ for(let x=LO+1;x<=HI-1;x+=2)c.lineTo(x,surf(x)+D2);
+ c.lineTo(HI,YC+D2);c.lineTo(HI,DECK+D2);c.lineTo(W,DECK+D2);c.lineTo(W,HY);c.lineTo(0,HY);c.closePath();
  c.fillStyle=PG;c.fill();c.clip();
  for(let cx=0;cx<W;cx+=8)for(let cy=48;cy<HY;cy+=8){rc(c,PD,cx,cy,8,1);rc(c,PD,cx,cy,1,8);for(let k=1;k<7;k++){rc(c,PD,cx+k,cy+k,1,1);rc(c,PD,cx+7-k,cy+k,1,1)}}
  rc(c,PD,0,HY-4,W,4);c.restore();
  // riding surface, extruded in depth
- for(let x=37;x<=203;x++){const y=surf(x),h=Math.round(DP+Math.min(Math.abs(slope(x)),8)),t=Math.round(y-D2);
+ for(let x=LO+1;x<=HI-1;x++){const y=surf(x),h=Math.round(DP+Math.min(Math.abs(slope(x)),8)),t=Math.round(y-D2);
   rc(c,PL,x,t,1,h);
   for(let j=0;j<h;j++){if(j<5&&(x+j)&1)rc(c,PG,x,t+j,1,1);if(j>h*.55&&(x+j)&1)rc(c,PW,x,t+j,1,1)}
   rc(c,PG,x,t,1,1);rc(c,PW,x,t+h-1,1,1);rc(c,PD,x,t+h,1,2)}
+ for(let x=CX1+4;x<CX2-4;x+=10){rc(c,PG,x,FL-D2+8,5,1);rc(c,PG,x+5,FL+D2-9,5,1)} // skid marks on the floor
+ c.font=FONT;c.textBaseline='top';c.textAlign='center';rc(c,PD,98,126,44,10);rc(c,PL,99,127,42,8);c.fillStyle=PD;c.fillText(['BIG','HALF'][lvi],120,128); // name plate on the ramp face
  // side decks
- [[0,36],[204,36]].forEach(([x,w])=>{rc(c,PL,x,DECK-D2,w,DP);dth(c,x,DECK-D2,w,5,PG);dth(c,x,DECK+4,w,D2-4,PW);
+ [[0,LO],[HI,W-HI]].forEach(([x,w])=>{rc(c,PL,x,DECK-D2,w,DP);dth(c,x,DECK-D2,w,5,PG);dth(c,x,DECK+4,w,D2-4,PW);
   rc(c,PG,x,DECK-D2,w,1);rc(c,PW,x,DECK+D2-1,w,1);rc(c,PD,x,DECK+D2,w,2)});
- [34,203].forEach(x=>{const y0=DECK-D2,y1=DECK+D2;
+ rc(c,PD,LO-14,DECK-1,7,9);rc(c,PG,LO-13,DECK,5,7);rc(c,PL,LO-14,DECK-2,7,1);rc(c,PW,LO-12,DECK+1,1,5); // trash bin
+ [[2,2],[1,4],[0,6]].forEach(([dx,w],r)=>rc(c,r==1?PW:PL,HI+8+dx,DECK+2+r,w,1));rc(c,PD,HI+7,DECK+5,8,2); // traffic cone
+ [LO-2,HI-1].forEach(x=>{const y0=DECK-D2,y1=DECK+D2;
   rc(c,PD,x,y0,4,y1-y0);rc(c,PW,x+1,y0,1,y1-y0);rc(c,PL,x+2,y0,1,y1-y0);
   for(let y=y0+4;y<y1;y+=8)rc(c,PD,x,y,4,1);
   rc(c,PD,x,y1,4,3);rc(c,PG,x+1,y1+1,2,1)});
@@ -194,44 +247,85 @@ function build(){
 build();if(document.fonts)document.fonts.load(FONT).then(build);
 
 /* ---------- drawing ---------- */
+// balance meter over the skater during a rock stall: marker to the ramp end = ride in, to the other end = fall
+function meter(){const p=P;if(!p.stall||p.sl||p.drop||p.out>0||(p.hi&&p.stT<p.fT))return;
+ const rs=p.sx<120?1:-1,cx=Math.round(p.sx+rs*7),cy=Math.round(p.y+(p.z-.5)*DP)-40;
+ rc(g,PD,cx-15,cy,31,7);rc(g,PL,cx-14,cy+1,29,5);
+ dth(g,rs>0?cx-14:cx+10,cy+1,5,5,PD);rc(g,PW,rs>0?cx+10:cx-14,cy+1,5,5);rc(g,PD,cx,cy+1,1,5);
+ const mx=Math.round(cx+p.bm*13);rc(g,PD,mx-1,cy-2,3,11);rc(g,PW,mx,cy-1,1,9)}
 function shadow(){const p=P;
- if(p.stall){const gy=Math.round(DECK+(p.z-.5)*DP)+2,gx=Math.round(p.sx<120?p.sx-4:p.sx+4);dth(g,gx-5,gy,10,2,PD);return}
- const h=p.air?Math.max(0,surf(p.x)-p.y):0,L=Math.max(6,16-((h/5)|0)),a=Math.atan(slope(p.x)),cs=Math.cos(a),sn=Math.sin(a),
-  gy=surf(p.x)+(p.z-.5)*DP+1,steep=Math.abs(sn)>.7;
+ if(p.stall){ // on the deck at the coping; shrinks and fades while he is still falling onto it
+  const fall=p.stall&&p.hi&&!p.drop&&p.out<=0&&p.stT<p.fT,h=fall?Math.max(0,p.h0-p.fv*p.stT-247.5*p.stT*p.stT):0,w=Math.max(4,10-((h/5)|0)),
+   gy=Math.round(DECK+(p.z-.5)*DP)+2,gx=Math.round(p.sx<120?p.sx-4:p.sx+4);
+  if(h>16)dth(g,gx-(w>>1),gy,w,2,PD);else rc(g,PD,gx-(w>>1),gy,w,2);return}
+ const h=p.air?Math.max(0,surf(p.x)-p.y):0,a=Math.atan(slope(p.x)),cs=Math.cos(a),sn=Math.sin(a),steep=Math.abs(sn)>.7,
+  L=Math.max(5,(steep?10:16)-((h/6)|0)),gy=surf(p.x)+(p.z-.5)*DP+1,faint=h>18;
  for(let t=-L/2;t<=L/2;t++){const x=Math.round(p.x+t*cs),y=Math.round(gy+t*sn);
-  if(Math.abs(t)>L/2-3&&((x+y)&1))continue;rc(g,PD,x,y,1,1);rc(g,PD,steep?x+1:x,steep?y:y+1,1,1)}}
-function skater(){
- const p=P;g.save();g.translate(Math.round(p.x),Math.round(p.y+(p.z-.5)*DP)+1);
- if(p.stall){const m=p.sx<120?-1:1,f=SEQ[(tt/.083|0)%5];g.scale(m,1);
-  if(p.drop)pose(KD,p.out>0?1+(1-p.out/.25):cl((p.dropT-.6)/.2,0,1),f);
-  else if(p.hi&&!(p.out>0)&&p.stT<p.fT)pose(KA,2*p.stT/p.fT,f,-2.8-(p.h0-p.fv*p.stT-247.5*p.stT*p.stT));
-  else pose(KS,p.out>0?2*p.out/p.oT:(p.hi?2:Math.min(2,p.stT*p.sr/.15)),f);
-  g.restore();return}
- const st=Math.PI/12;g.rotate(Math.round(p.rot/st)*st);
-
- if(p.bail){g.rotate(1.5*p.dir);g.translate(0,-3)}
+  if(faint&&((x+y)&1))continue;if(Math.abs(t)>L/2-2&&((x+y)&1))continue;rc(g,PD,x,y,1,1);if(!faint)rc(g,PD,steep?x+1:x,steep?y:y+1,1,1)}}
+let RSB={},RSC={},gv=0; // caches for rotated sprites (cleared when the gear changes)
+function epx(src,w,h){const dst=new Uint32Array(w*h*4),W2=w*2;
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){const P=src[y*w+x],A=y>0?src[(y-1)*w+x]:0,B=x<w-1?src[y*w+x+1]:0,C=x>0?src[y*w+x-1]:0,D=y<h-1?src[(y+1)*w+x]:0;
+  let p1=P,p2=P,p3=P,p4=P;
+  if(C==A&&C!=D&&A!=B)p1=A;if(A==B&&A!=C&&B!=D)p2=B;if(D==C&&D!=B&&C!=A)p3=C;if(B==D&&B!=A&&D!=C)p4=D;
+  const o=y*2*W2+x*2;dst[o]=p1;dst[o+1]=p2;dst[o+W2]=p3;dst[o+W2+1]=p4}
+ return dst}
+// RotSprite: draw(ctx) paints the sprite upright with its pivot at the canvas centre; returns it rotated by ang (radians)
+function rotSpr(key,size,draw,ang){
+ let b=RSB[key];
+ if(!b){const cv2=document.createElement('canvas');cv2.width=cv2.height=size;const x=cv2.getContext('2d');x.imageSmoothingEnabled=false;draw(x);
+  let a=new Uint32Array(x.getImageData(0,0,size,size).data.buffer.slice(0)),n=size;for(let i=0;i<3;i++){a=epx(a,n,n);n*=2}b=RSB[key]={a,n}}
+ const ck=key+'|'+ang;let c=RSC[ck];
+ if(!c){const N=size,n=b.n,out=new Uint32Array(N*N),co=Math.cos(ang),si=Math.sin(ang),pv=N*4;
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){const dx=x*8+4-pv,dy=y*8+4-pv,sx=Math.floor(dx*co+dy*si+pv),sy=Math.floor(-dx*si+dy*co+pv);if(sx>=0&&sy>=0&&sx<n&&sy<n)out[y*N+x]=b.a[sy*n+sx]}
+  c=RSC[ck]=document.createElement('canvas');c.width=c.height=N;const x=c.getContext('2d'),im=x.createImageData(N,N);new Uint32Array(im.data.buffer).set(out);x.putImageData(im,0,0)}
+ return c}
+// exact quarter turns (no resampling at all)
+function rotG(ang){const q=Math.round(ang/(Math.PI/2));
+ if(Math.abs(ang-q*Math.PI/2)<1e-6){const m=[[1,0,0,1],[0,1,-1,0],[-1,0,0,-1],[0,-1,1,0]][((q%4)+4)%4];g.transform(m[0],m[1],m[2],m[3],0,0)}else g.rotate(ang)}
+// the skater (board + body + grab arm) drawn upright at the origin
+function drawUpright(p,shift){
+ g.save();if(shift)g.translate(0,-3);
  g.scale(p.spinOn?Math.cos(p.spin*Math.PI*2)||.05:1,1);
- g.save();g.translate(0,p.flipOn?-9:-3);if(p.flipOn)g.rotate(Math.round(p.flip*8)*Math.PI/4);g.drawImage(BD,-8,-3);g.restore();
+ g.save();g.translate(0,p.flipOn?-3-Math.round(Math.sin(p.flip*Math.PI)*3):-3);
+ if(p.flipOn){const a=p.flip*Math.PI*(p.fk<2?2:1);
+  if(p.fk<2){g.rotate((p.fk?-1:1)*Math.sin(a)*.6);g.scale(1,Math.cos(a)||.05)} // kickflip tips one way, heelflip the other
+  else g.scale(Math.cos(a*(p.fk==3?-1:1))||.05,1)}
+ g.drawImage(BD,-8,-3);g.restore();
  const cr=p.grab>.5,by=-26+(cr?2:0),f=p.air?0:SEQ[(tt/.083|0)%5];
  if(FR[f].complete)g.drawImage(FR[f],-12,by);
- if(cr){const y0=by+17;rc(g,PD,-7,y0,4,-4-y0);rc(g,PW,-6,y0,2,-4-y0)}
+ if(cr){const k=p.gk||0,tx=[3,-3,8,-8][k],x0=tx>0?4:-4,y0=by+17;g.fillStyle=PD;fline(x0,y0,tx,-5);fline(x0,y0+1,tx,-4);rc(g,PD,tx-1,-7,3,3);rc(g,PW,tx,-6,1,1)}
+ g.restore()}
+function skater(){
+ const p=P;g.save();g.translate(Math.round(p.x),Math.round(p.y+(p.z-.5)*DP)+1);
+ if(p.stall&&p.g50&&!p.drop){const f=SEQ[(tt/.083|0)%5],dy=p.hi&&p.stT<p.fT?-(p.h0-p.fv*p.stT-247.5*p.stT*p.stT):0;g.translate(0,Math.round(dy)-3);const tl=[0,.52,-.52][(p.sl||1)-1];
+  if(tl)g.drawImage(rotSpr('be|'+Math.sign(tl)+'|'+gv,24,x=>x.drawImage(BE,6,9),tl),-12,-12);else g.drawImage(BE,-6,-3);
+  g.translate(0,-3);if(FR[f].complete){if(tl)g.drawImage(rotSpr('bl|'+f+'|'+Math.sign(tl)+'|'+gv,56,x=>x.drawImage(FR[f],16,4),Math.round(tl*.5/.2618)*.2618),-28,-28);else g.drawImage(FR[f],-12,-24)}g.restore();return}
+ if(p.stall){const m=p.sx<120?-1:1,f=SEQ[(tt/.083|0)%5];g.scale(m,1);
+  if(p.drop)pose(KD,p.out>0?1+(1-p.out/.25):cl((p.dropT-.6)/.2,0,1),f);
+  else if(p.hi&&!(p.out>0)&&p.stT<p.fT){const K=KSETS[p.sk||0];pose([KA[0],KA[1],K[2]],2*p.stT/p.fT,f,K[2][2]-(p.h0-p.fv*p.stT-247.5*p.stT*p.stT))}
+  else pose(KSETS[p.sk||0],p.out>0?2*p.out/p.oT:(p.hi?2:Math.min(2,p.stT*p.sr/.15)),f);
+  g.restore();return}
+ const st=Math.PI/12,ang=Math.round((p.rot+(p.bail?1.5*p.dir:0))/st)*st,dyn=p.flipOn||p.spinOn,q=Math.round(ang/(Math.PI/2));
+ if(ang==0||dyn||Math.abs(ang-q*Math.PI/2)<1e-6){rotG(ang);drawUpright(p,p.bail)} // 0/90/180/270 degrees are exact; flips and spins are animated, so they use the plain transform
+ else{const cr=p.grab>.5,f=p.air?0:SEQ[(tt/.083|0)%5]; // any other angle: clean RotSprite rotation, cached per pose
+  g.drawImage(rotSpr(['sk',f,cr?1+(p.gk||0):0,p.bail?1:0,gv].join('|'),72,x=>{const og=g;g=x;x.translate(36,36);drawUpright(p,p.bail);g=og},ang),-36,-36)}
  g.restore();
 }
 function T(s,x,y,col,al){g.fillStyle=PD;g.textAlign=al||'left';g.fillText(s,x+1,y+1);g.fillStyle=col;g.fillText(s,x,y)}
 function draw(){
  g.drawImage(bg,0,0);
- shadow();skater();
+ shadow();skater();meter();
  g.font=FONT;g.textBaseline='top';
  g.fillStyle=PD;g.fillRect(0,HY,W,12);
  g.fillStyle=PW;g.textAlign='left';g.fillText('SCORE '+String(score).padStart(5,'0'),4,HY+2);
  g.textAlign='right';g.fillText('TIME '+Math.ceil(time),W-4,HY+2);
- if(pop.t<1.6)T(pop.s,W/2,14,pop.t%.3<.15?PW:PL,'center');
- if(state=='gear')menu();else if(state!='play'){
+ if(pop.t<1.6){const ps=pop.s,col=pop.t%.3<.15?PW:PL;if(ps.length>28){let i=ps.lastIndexOf('+',28);if(i<1)i=28;T(ps.slice(0,i),W/2,8,col,'center');T(ps.slice(i),W/2,18,col,'center')}else T(ps,W/2,14,col,'center')}
+ if(state=='gear')menu();else if(state=='level')levelMenu();else if(state!='play'){
   rc(g,PW,30,30,180,92);rc(g,PD,31,31,178,90);dth(g,31,31,178,90,PG);rc(g,PD,35,35,170,82);
   g.textAlign='center';g.fillStyle=PW;
   if(state=='title'){
    g.fillText('MINI RAMP',W/2,40);g.fillStyle=PL;
-   g.fillText('L/R PUMP / LEAN',W/2,54);g.fillText('UP/DOWN BACK-FRONT',W/2,65);g.fillText('Z GRAB  X FLIP  C 360',W/2,76);g.fillText('A STALL AT COPING',W/2,87);
+   g.fillText('L/R PUMP / LEAN',W/2,54);g.fillText('UP/DOWN BACK-FRONT',W/2,65);g.fillText('A FLIP D GRAB S SPIN',W/2,76);g.fillText('W STALL OR SLIDE',W/2,87);
   }else{g.fillText('TIME UP',W/2,56);g.fillStyle=PL;g.fillText('SCORE '+score,W/2,72)}
   if((tt*2|0)%2==0){g.fillStyle=PW;g.fillText('PRESS SPACE',W/2,104)}
  }
@@ -256,8 +350,8 @@ function recol(cv,dk,wh){const o=document.createElement('canvas');o.width=cv.wid
   if(d[i]==169&&d[i+1]==187&&d[i+2]==156){d[i]=a[0];d[i+1]=a[1];d[i+2]=a[2]}
   else if(d[i]==224&&d[i+1]==248&&d[i+2]==207){d[i]=b[0];d[i+1]=b[1];d[i+2]=b[2]}}
  x.putImageData(im,0,0);return o}
-function applyBoard(){const dk=DECKS[gear[3]][1],wh=WHEELS[gear[4]][1];BD=recol(BD0,dk,wh);for(const a in BC0)BC[a]=recol(BC0[a],dk,wh)}
-function bake(){FR=FR0.map(im=>{if(!im.complete||!im.naturalWidth)return im;
+function applyBoard(){RSB={};RSC={};gv++;const dk=DECKS[gear[3]][1],wh=WHEELS[gear[4]][1];BD=recol(BD0,dk,wh);BE=recol(BE0,dk,wh);for(const a in BC0)BC[a]=recol(BC0[a],dk,wh)}
+function bake(){RSB={};RSC={};gv++;FR=FR0.map(im=>{if(!im.complete||!im.naturalWidth)return im;
  const c=document.createElement('canvas');c.width=c.height=24;const x=c.getContext('2d');x.drawImage(im,0,0);
  const id=x.getImageData(0,0,24,24),d=id.data,isG=(r,gg,b)=>(r==66&&gg==70&&b==63)||(r==53&&b==50)||(r==39&&gg==41&&b==36);
  let top=-1,lastG=-1;
@@ -283,6 +377,31 @@ function menu(){
  g.save();g.translate(204,98);g.scale(2,2);g.drawImage(BD,-8,-6);const f=SEQ[(tt/.083|0)%5];if(FR[f].complete)g.drawImage(FR[f],-12,-26);g.restore();
  if((tt*2|0)%2==0)T('PRESS SPACE TO SKATE',120,112,PW,'center');
 }
+/* ---------- level select ---------- */
+const LEVELS=[['BIG RAMP',44,80,160,232],['HALF RAMP',22,79,161,175]]; // name, radius, flat start, flat end, top speed
+let lv=0;
+function setLevel(i){lv=lvi=i;const L=LEVELS[i];R=L[1];CX1=L[2];CX2=L[3];VMAX=L[4];YC=FL-R;DECK=YC-6;LO=CX1-R;HI=CX2+R;build();reset()}
+function levelKey(k){const n=LEVELS.length;
+ if(k=='l'||k=='u')setLevel((lv+n-1)%n);else if(k=='r'||k=='n')setLevel((lv+1)%n);else return;
+ try{localStorage.setItem('rampLevel',lv)}catch(e){}}
+try{const sv=+localStorage.getItem('rampLevel');if(sv>0&&sv<LEVELS.length)setLevel(sv)}catch(e){}
+function levelMenu(){
+ rc(g,PW,6,8,228,118);rc(g,PD,7,9,226,116);dth(g,7,9,226,116,PG);rc(g,PD,10,12,220,110);
+ T('SELECT LEVEL',120,16,PW,'center');
+ LEVELS.forEach((L,i)=>{const x0=16+i*110,sel=i==lv,mid=x0+50,base=92,k=.4;
+  rc(g,sel?PW:PG,x0-2,30,104,70);rc(g,PD,x0,32,100,66);
+  for(let x=L[2]-L[1];x<=L[3]+L[1];x++){const d=x<L[2]?x-L[2]:x>L[3]?x-L[3]:0,h=L[1]-Math.sqrt(Math.max(0,L[1]*L[1]-d*d)),px=Math.round(mid+(x-120)*k),py=Math.round(base-h*k);
+   rc(g,PG,px,py+1,1,base-py);rc(g,PW,px,py,1,1)}
+  const top=Math.round(base-L[1]*k),a=Math.round(mid+(L[2]-L[1]-120)*k),b=Math.round(mid+(L[3]+L[1]-120)*k);
+  rc(g,PL,x0+4,top,a-x0-4,1);rc(g,PG,x0+4,top+1,a-x0-4,base-top);rc(g,PL,b,top,x0+96-b,1);rc(g,PG,b,top+1,x0+96-b,base-top);
+  rc(g,PW,x0+4,base,92,2);
+  T(L[0],mid,104,sel?PW:PL,'center')});
+ if((tt*2|0)%2==0)T('< > CHOOSE  SPACE: GO',120,114,PW,'center');
+}
+// back to the main menu from anywhere (MENU button or Esc)
+function toMenu(){for(const k in keys)keys[k]=0;state='title';reset();pop={t:9,s:''}}
+document.getElementById('menub').onclick=e=>{toMenu();e.target.blur()};
+addEventListener('keydown',e=>{if(e.key=='Escape')toMenu()});
 const bgf=document.getElementById('bgf');
 function setBG(url,save){const im=new Image();im.onload=()=>{CBG=im;build();if(save){try{localStorage.setItem('rampBG',url)}catch(e){}}};im.src=url}
 document.getElementById('bgb').onclick=()=>bgf.click();
@@ -291,5 +410,6 @@ bgf.onchange=()=>{const f=bgf.files[0];if(!f)return;const r=new FileReader();r.o
 try{const sv=localStorage.getItem('rampBG');if(sv)setBG(sv,0)}catch(e){}
 let last=performance.now();
 function loop(now){if(!baked&&FR0.every(i=>i.complete&&i.naturalWidth)){bake();baked=true}const dt=Math.min(.033,(now-last)/1000);last=now;tt+=dt;pop.t+=dt;upd(dt);draw();requestAnimationFrame(loop)}
+addEventListener('resize',fit);fit();
 requestAnimationFrame(loop);
 </script></body></html>
